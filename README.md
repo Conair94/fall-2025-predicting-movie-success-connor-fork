@@ -1,4 +1,4 @@
-Originally this was an Erdos Institute Data Science Fall 2025 project as described below. This fork is an expansion of the original project to incorperate more features.
+Originally this was an Erdos Institute Data Science Fall 2025 project as described below. This fork is an expansion of the original project by Connor Lockhart to incorperate more features.
 
 # fall-2025-predicting-movie-success
 Team project: fall-2025-predicting-movie-success
