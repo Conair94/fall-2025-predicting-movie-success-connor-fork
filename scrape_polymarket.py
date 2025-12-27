@@ -9,22 +9,15 @@ from datetime import datetime
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
 OUTPUT_FILE = "data/raw/market_odds_polymarket.csv"
 
-def fetch_best_picture_market(year_str):
+def fetch_market_by_slug(slug):
     """
-    Fetches the 'Best Picture' market for a given Oscars year.
-    Note: Oscars 2026 implies the ceremony in early 2026.
-    Search query usually needs to be broad like "Oscar" or "Best Picture".
+    Fetches a specific event by its URL slug.
     """
     params = {
-        "limit": 20,
-        "active": "true",
-        "closed": "false",
-        "order": "volume24hr",
-        "ascending": "false",
-        "q": f"Best Picture {year_str}" # e.g. "Best Picture 2025" or "2026"
+        "slug": slug
     }
     
-    print(f"Searching Polymarket for: {params['q']}...")
+    print(f"Direct lookup for Polymarket event slug: '{slug}'...")
     try:
         response = requests.get(POLYMARKET_API_URL, params=params)
         response.raise_for_status()
@@ -34,69 +27,76 @@ def fetch_best_picture_market(year_str):
         return None
 
     if not data:
-        print("No events found.")
+        print(f"No event found for slug: {slug}")
         return None
 
-    # Filter for the specific market
-    # We want the main "Winner" market.
-    markets_data = []
+    # The API might return a list [event] or a single event dict
+    if isinstance(data, list):
+        if not data:
+            return None
+        event = data[0]
+    else:
+        event = data
+
+    print(f"Found Event: {event.get('title')}")
     
-    for event in data:
-        # Check title relevance
-        title = event.get('title', '')
-        if 'Best Picture' not in title:
+    markets_data = []
+    markets = event.get('markets', [])
+    
+    for m in markets:
+        # Determine the Movie Name
+        # In event groups, 'groupItemTitle' usually holds the specific outcome name (the movie)
+        movie_name = m.get('groupItemTitle')
+        
+        # Fallback: Parse from question (e.g. "Will Anora win Best Picture?")
+        if not movie_name:
+            question = m.get('question', '')
+            if 'Will ' in question and ' win' in question:
+                movie_name = question.split('Will ')[1].split(' win')[0]
+            else:
+                movie_name = question # Last resort
+        
+        # Extract outcomes and prices
+        outcomes = json.loads(m.get('outcomes', '[]'))
+        prices = json.loads(m.get('outcomePrices', '[]'))
+        
+        if len(outcomes) != len(prices):
+            # Try to get price from the individual market fields if outcomePrices is empty
+            # Gamma API sometimes uses 'lastTradePrice' or 'bestBid'/'bestAsk'
             continue
             
-        print(f"Found Event: {title}")
-        
-        # Each event has 'markets'
-        markets = event.get('markets', [])
-        for m in markets:
-            # We want the market outcomes
-            # Polymarket outcome prices are usually in 'outcomePrices' (json string) or separate fields
-            # The API structure varies, usually it returns a list of markets.
-            # Let's extract outcomes.
-            
-            # Gamma API structure:
-            # Market has 'outcomes' (["Movie A", "Movie B"]) and 'outcomePrices' (["0.10", "0.90"])
-            outcomes = json.loads(m.get('outcomes', '[]'))
-            prices = json.loads(m.get('outcomePrices', '[]'))
-            
-            if len(outcomes) != len(prices):
-                print(f"Warning: Outcome/Price mismatch for {m.get('question')}")
-                continue
-                
-            for outcome, price in zip(outcomes, prices):
+        for outcome, price in zip(outcomes, prices):
+            # We primarily want the "Yes" price (the cost to bet on the movie winning)
+            if outcome.lower() == 'yes':
                 markets_data.append({
                     'market_id': m.get('id'),
-                    'event_title': title,
-                    'movie': outcome,
+                    'event_title': event.get('title'),
+                    'movie': movie_name,
                     'price': float(price),
                     'volume': float(m.get('volume', 0)),
                     'timestamp': datetime.now().isoformat()
                 })
-                
+            
     return pd.DataFrame(markets_data)
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape Polymarket for Oscar Odds")
-    parser.add_argument("year", type=str, help="Oscar Ceremony Year (e.g. 2025 or 2026)")
+    parser.add_argument("year", type=str, help="Oscar Ceremony Year (e.g. 2026)")
     args = parser.parse_args()
     
-    df = fetch_best_picture_market(args.year)
+    # Construct the slug based on the user's provided URL structure
+    # URL: https://polymarket.com/event/oscars-2026-best-picture-winner
+    target_slug = f"oscars-{args.year}-best-picture-winner"
+    
+    df = fetch_market_by_slug(target_slug)
     
     if df is not None and not df.empty:
-        # Clean Movie Names
-        # Remove " (2024)" etc if present? Polymarket names are usually just the movie title.
-        # But sometimes "Oppenheimer"
-        
-        # Save
         os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
         df.to_csv(OUTPUT_FILE, index=False)
         print(f"\nSaved {len(df)} market odds to {OUTPUT_FILE}")
         print(df.sort_values('price', ascending=False).head(10))
     else:
-        print("No data found. Check your search query or Polymarket availability.")
+        print("Failed to fetch market data.")
 
 if __name__ == "__main__":
     main()
